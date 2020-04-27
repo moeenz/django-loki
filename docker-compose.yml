@@ -1,0 +1,85 @@
+version: "3.7"
+
+networks:
+  blog-net:
+    name: blog-net
+
+volumes:
+  postgres-data: {}
+  grafana-data: {}
+  prometheus_data: {}
+
+x-logging: &loki-logging
+  driver: loki
+  options:
+    loki-url: "http://localhost:3100/api/prom/push"
+
+services:
+  app:
+    build: .
+    image: blog/app
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    env_file:
+      - ./config/django/django.env
+      - ./config/gunicorn/gunicorn.env
+    command: gunicorn blog.wsgi:application -c /usr/web/config/gunicorn/gunicorn-blog.conf.py
+    ports:
+      - "8000:8000"
+    networks:
+      - blog-net
+    logging: *loki-logging
+  postgres:
+    image: bitnami/postgresql:12.2.0
+    restart: unless-stopped
+    env_file:
+      - ./config/postgres/postgres.env
+    ports:
+      - "5432:5432"
+    networks:
+      - blog-net
+    volumes:
+      - ./config/postgres/docker-entrypoint-initdb.d/:/docker-entrypoint-initdb.d
+      - postgres-data:/bitnami/postgresql
+    logging: *loki-logging
+  grafana:
+    image: grafana/grafana:6.7.3
+    restart: unless-stopped
+    env_file:
+      - ./config/grafana/grafana.env
+    ports:
+      - "3000:3000"
+    networks:
+      - blog-net
+    volumes:
+      - grafana-data:/var/lib/grafana
+    logging: *loki-logging
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.15.0
+    restart: unless-stopped
+    command:
+      - "--statsd.mapping-config=/statsd/statsd.conf"
+    networks:
+      - blog-net
+    volumes:
+      - ./config/statsd-exporter/statsd.conf:/statsd/statsd.conf
+    logging: *loki-logging
+  prometheus:
+    image: prom/prometheus:v2.17.2
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=24h"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    networks:
+      - blog-net
+    volumes:
+      - ./config/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    logging: *loki-logging
